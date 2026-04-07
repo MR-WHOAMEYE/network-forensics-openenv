@@ -449,7 +449,11 @@ def run_task(task_name: str) -> None:
 
 
 def main() -> None:
-    validate_config()
+    try:
+        validate_config()
+    except RuntimeError as exc:
+        print(f"Configuration error: {exc}", file=sys.stderr)
+        sys.exit(1)
     try:
         for task_name in ("easy", "medium", "hard"):
             run_task(task_name)
