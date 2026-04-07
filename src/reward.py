@@ -38,6 +38,7 @@ def compute_reward(
     grouped_sessions: Dict[str, List[str]],
     tagged_patterns: Dict[str, str],
     reward_state: Dict[str, Any],
+    task_id: str = "easy",
 ) -> Reward:
     raw_step_reward = -0.005
     breakdown = {"step_cost_raw": -0.005}
@@ -48,6 +49,7 @@ def compute_reward(
     malicious_set = set(ground_truth.malicious_packets)
     sessions = ground_truth.sessions or {}
     session_roles = ground_truth.session_roles or {}
+    already_rewarded_packet_ids = reward_state.setdefault("already_rewarded_packet_ids", set())
     inspected_malicious = reward_state.setdefault("inspected_malicious", set())
     flagged_malicious = reward_state.setdefault("flagged_malicious", set())
     rewarded_sessions = reward_state.setdefault("rewarded_sessions", set())
@@ -58,10 +60,14 @@ def compute_reward(
         if action.packet_id in packet_map:
             pkt = packet_map[action.packet_id]
             if action.packet_id in malicious_set and not pkt.is_revealed:
-                delta = 0.08
-                if action.packet_id not in inspected_malicious:
+                delta = 0.05
+                if (
+                    action.packet_id not in inspected_malicious
+                    and action.packet_id not in already_rewarded_packet_ids
+                ):
                     delta += 0.04
                     inspected_malicious.add(action.packet_id)
+                    already_rewarded_packet_ids.add(action.packet_id)
                     breakdown["inspect_progress_raw"] = 0.04
                 raw_step_reward += delta
                 breakdown["malicious_inspect_raw"] = round(delta, 4)
@@ -82,10 +88,14 @@ def compute_reward(
             breakdown["already_flagged_raw"] = -0.08
         elif action.packet_id in packet_map:
             if action.packet_id in malicious_set:
-                delta = 0.12
-                if action.packet_id not in flagged_malicious:
+                delta = 0.09
+                if (
+                    action.packet_id not in flagged_malicious
+                    and action.packet_id not in already_rewarded_packet_ids
+                ):
                     delta += 0.05
                     flagged_malicious.add(action.packet_id)
+                    already_rewarded_packet_ids.add(action.packet_id)
                     breakdown["flag_progress_raw"] = 0.05
                 raw_step_reward += delta
                 breakdown["correct_flag_raw"] = round(delta, 4)
@@ -104,15 +114,17 @@ def compute_reward(
             truth = set(sessions[best_session])
             precision = len(submitted & truth) / max(1, len(submitted))
             recall = len(submitted & truth) / max(1, len(truth))
-            group_score = (precision + recall) / 2
-            delta = round(group_score * 0.18 - 0.04, 4)
-            if group_score >= 0.6 and best_session not in rewarded_sessions:
-                delta += 0.12
+            group_score = round((recall * 0.8) + (precision * 0.2), 4)
+            delta = round((recall * 0.12) + (precision * 0.02) - 0.09, 4)
+            if precision >= 0.85 and recall >= 0.85 and best_session not in rewarded_sessions:
+                delta += 0.20
                 rewarded_sessions.add(best_session)
-                breakdown["session_progress_raw"] = 0.12
+                breakdown["session_progress_raw"] = 0.20
             raw_step_reward += delta
             breakdown["group_overlap_raw"] = delta
-            message = f"Matched session {best_session} with score {group_score:.2f}"
+            breakdown["group_precision"] = round(precision, 4)
+            breakdown["group_recall"] = round(recall, 4)
+            message = f"Matched session {best_session} with recall {recall:.2f} and precision {precision:.2f}"
         else:
             correct = sum(1 for pid in submitted if pid in malicious_set)
             wrong = len(submitted) - correct
@@ -163,36 +175,68 @@ def compute_reward(
         true_positive = len(flagged & malicious_set)
         precision = true_positive / max(1, len(flagged))
         recall = true_positive / max(1, len(malicious_set))
-        f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) else 0.0
-        session_hits = 0
-        for session_name, truth_packets in sessions.items():
-            truth = set(truth_packets)
-            for grouped in grouped_sessions.values():
-                if truth == set(grouped):
-                    session_hits += 1
-                    break
-        session_score = session_hits / max(1, len(sessions))
-        tag_hits = 0
+        session_overlap_scores = []
         for submitted_name, submitted_packets in grouped_sessions.items():
             matched_truth_session, overlap = _best_matching_session(set(submitted_packets), sessions)
-            if matched_truth_session and overlap >= 0.8:
-                expected_role = session_roles.get(matched_truth_session, "").lower()
-                if tagged_patterns.get(submitted_name, "").lower() == expected_role:
-                    tag_hits += 1
-        tag_score = tag_hits / max(1, len(session_roles))
-        entry_score = 1.0 if reward_state.get("entry_point_rewarded") else 0.0
-        final_score = round(f1 * 0.45 + session_score * 0.25 + tag_score * 0.20 + entry_score * 0.10, 4)
+            if matched_truth_session:
+                session_overlap_scores.append(overlap)
+        session_overlap = max(session_overlap_scores) if session_overlap_scores else 0.0
+
+        pattern_score = 0.0
+        if grouped_sessions and tagged_patterns:
+            pattern_hits = 0
+            checked = 0
+            for submitted_name, submitted_packets in grouped_sessions.items():
+                matched_truth_session, overlap = _best_matching_session(set(submitted_packets), sessions)
+                if matched_truth_session and overlap >= 0.7:
+                    checked += 1
+                    expected_role = session_roles.get(matched_truth_session, "").lower()
+                    if tagged_patterns.get(submitted_name, "").lower() == expected_role:
+                        pattern_hits += 1
+            pattern_score = pattern_hits / max(1, checked)
+
+        entry_score = 1.0 if action.claimed_entry_point == ground_truth.entry_point or reward_state.get("entry_point_rewarded") else 0.0
+        logic_components = []
+        if task_id in {"medium", "hard"}:
+            logic_components.append(session_overlap)
+        if task_id == "hard":
+            logic_components.append(entry_score)
+            logic_components.append(pattern_score)
+        elif task_id == "medium":
+            logic_components.append(pattern_score)
+        else:
+            logic_components.append(1.0 if flagged else 0.0)
+        logic_score = sum(logic_components) / max(1, len(logic_components))
+
+        final_score = round((0.3 * precision) + (0.4 * recall) + (0.3 * logic_score), 4)
+
+        if task_id == "easy":
+            success = recall >= 0.8 and recall > 0.5
+            if recall < 0.5:
+                final_score = 0.0
+        elif task_id == "medium":
+            success = recall >= 0.8 and session_overlap >= 0.7 and precision >= 0.4
+            if precision < 0.2:
+                final_score = 0.0
+        else:
+            success = recall >= 0.8 and session_overlap >= 0.7 and entry_score == 1.0 and pattern_score >= 0.5
+            if entry_score == 0.0:
+                final_score = 0.0
+
         final_bonus = round(final_score * 0.45, 4)
         raw_step_reward += final_bonus
-        breakdown["final_f1"] = round(f1, 4)
-        breakdown["final_session_score"] = round(session_score, 4)
-        breakdown["final_tag_score"] = round(tag_score, 4)
+        breakdown["final_precision"] = round(precision, 4)
+        breakdown["final_recall"] = round(recall, 4)
+        breakdown["final_logic"] = round(logic_score, 4)
+        breakdown["final_session_overlap"] = round(session_overlap, 4)
+        breakdown["final_pattern_score"] = round(pattern_score, 4)
         breakdown["final_entry_score"] = round(entry_score, 4)
         breakdown["final_score"] = final_score
         breakdown["final_bonus_raw"] = final_bonus
-        message = f"Report precision={precision:.2f} recall={recall:.2f} score={final_score:.2f}"
+        breakdown["success_threshold_met"] = 1.0 if success else 0.0
+        message = f"Report precision={precision:.2f} recall={recall:.2f} logic={logic_score:.2f} score={final_score:.2f}"
 
-    success = done and breakdown.get("final_score", 0.0) >= 0.6
+    success = done and bool(breakdown.get("success_threshold_met", breakdown.get("final_score", 0.0) >= 0.6))
     step_reward = _normalize_step_reward(raw_step_reward)
     breakdown["raw_step_reward"] = round(raw_step_reward, 4)
     breakdown["normalized_step_reward"] = step_reward

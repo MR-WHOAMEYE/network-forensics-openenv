@@ -14,7 +14,6 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from client import NetworkForensicsEnv
 from models import NetworkForensicsAction
-from server.network_forensics_environment import NetworkForensicsEnvironment
 
 
 load_dotenv(Path(__file__).parent / ".env")
@@ -57,8 +56,8 @@ def validate_config() -> None:
         missing.append("API_KEY")
     if missing:
         raise RuntimeError(f"Missing required environment variables: {', '.join(missing)}")
-    if ENV_MODE not in {"local", "server", "docker"}:
-        raise RuntimeError("NETWORK_FORENSICS_ENV_MODE must be one of: local, server, docker")
+    if ENV_MODE not in {"server", "docker"}:
+        raise RuntimeError("NETWORK_FORENSICS_ENV_MODE must be one of: server, docker")
 
 
 def format_action(action: NetworkForensicsAction) -> str:
@@ -292,9 +291,15 @@ def should_override_action(action: NetworkForensicsAction, obs: Any, agent_state
     return False
 
 
-def choose_action(client: OpenAI, task_name: str, obs: Any, agent_state: dict[str, Any]) -> NetworkForensicsAction:
+def choose_action(
+    client: OpenAI,
+    task_name: str,
+    obs: Any,
+    agent_state: dict[str, Any],
+    model_name: str | None = None,
+) -> NetworkForensicsAction:
     response = client.chat.completions.create(
-        model=MODEL_NAME,
+        model=model_name or MODEL_NAME,
         temperature=0,
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -356,32 +361,26 @@ def resolve_maybe_awaitable(value: Any) -> Any:
     return value
 
 
-def create_env(task_name: str) -> Any:
+def create_env() -> NetworkForensicsEnv:
     if ENV_MODE == "docker":
         provider = ExtendedWaitDockerProvider()
         return resolve_maybe_awaitable(
             NetworkForensicsEnv.from_docker_image(LOCAL_IMAGE_NAME, provider=provider)
         )
-    if ENV_MODE == "server":
-        return NetworkForensicsEnv(base_url=ENV_BASE_URL)
-    return NetworkForensicsEnvironment(task_id=task_name)
+    return NetworkForensicsEnv(base_url=ENV_BASE_URL)
 
 
-def reset_env(env: Any, task_name: str) -> Any:
-    if isinstance(env, NetworkForensicsEnvironment):
-        return env.reset()
+def reset_env(env: NetworkForensicsEnv, task_name: str) -> Any:
     result = resolve_maybe_awaitable(env.reset(task_id=task_name))
-    return result.observation
+    return result
 
 
-def step_env(env: Any, action: NetworkForensicsAction) -> Any:
-    if isinstance(env, NetworkForensicsEnvironment):
-        return env.step(action)
+def step_env(env: NetworkForensicsEnv, action: NetworkForensicsAction) -> Any:
     result = resolve_maybe_awaitable(env.step(action))
-    return result.observation
+    return result
 
 
-def close_env(env: Any) -> None:
+def close_env(env: NetworkForensicsEnv | None) -> None:
     if env is None:
         return
     try:
@@ -398,7 +397,7 @@ def close_async_loop() -> None:
 
 
 def run_task(task_name: str) -> None:
-    env = None
+    env: NetworkForensicsEnv | None = None
     rewards: list[float] = []
     final_steps = 0
     final_score = 0.0
@@ -408,12 +407,11 @@ def run_task(task_name: str) -> None:
     print(f"[START] task={task_name} env=network_forensics model={MODEL_NAME}")
 
     try:
-        env = create_env(task_name)
-        obs = reset_env(env, task_name)
+        env = create_env()
+        reset_result = reset_env(env, task_name)
+        obs = reset_result.observation
         sync_agent_state(obs, agent_state)
-        max_steps = getattr(env, "_max_steps", 50)
-        if not max_steps:
-            max_steps = obs.steps_remaining or 50
+        max_steps = obs.steps_remaining or 50
 
         for _ in range(max_steps):
             if obs.done:
@@ -426,14 +424,15 @@ def run_task(task_name: str) -> None:
                 error = str(exc).replace("\n", " ")
                 action = build_fallback_action(task_name, obs, agent_state)
 
-            obs = step_env(env, action)
+            step_result = step_env(env, action)
+            obs = step_result.observation
             sync_agent_state(obs, agent_state)
-            rewards.append(float(obs.reward or 0.0))
+            rewards.append(float(step_result.reward or 0.0))
             final_steps = obs.step_number
             final_score = normalize_score(obs.metadata.get("final_score", obs.current_score_estimate))
-            emit_step(obs.step_number, action, float(obs.reward or 0.0), bool(obs.done), error)
+            emit_step(obs.step_number, action, float(step_result.reward or 0.0), bool(step_result.done), error)
 
-            if obs.done:
+            if step_result.done:
                 break
 
         success = bool(obs.done and final_score >= 0.6)

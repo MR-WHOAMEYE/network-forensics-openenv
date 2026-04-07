@@ -125,6 +125,7 @@ class NetworkForensicsEnvironment(Environment):
             grouped_sessions=self._grouped_sessions,
             tagged_patterns=self._tagged_patterns,
             reward_state=self._reward_state,
+            task_id=self._task_id,
         )
 
         if action.action_type == "flag_as_suspicious" and action.packet_id:

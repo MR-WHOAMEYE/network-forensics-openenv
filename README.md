@@ -213,6 +213,7 @@ Available endpoints:
 - `/docs`
 - `/ws`
 - `/web`
+- `/demo`
 
 Run the baseline:
 
@@ -256,6 +257,7 @@ Expected Space endpoints:
 - `/docs`
 - `/ws`
 - `/web`
+- `/demo`
 
 ## Connecting From Python
 

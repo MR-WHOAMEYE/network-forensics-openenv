@@ -28,6 +28,8 @@ Usage:
     python -m server.app
 """
 
+import gradio as gr
+
 try:
     from openenv.core.env_server.http_server import create_app
 except Exception as e:  # pragma: no cover
@@ -37,9 +39,11 @@ except Exception as e:  # pragma: no cover
 
 try:
     from ..models import NetworkForensicsAction, NetworkForensicsObservation
+    from .gradio_ui import create_demo
     from .network_forensics_environment import NetworkForensicsEnvironment
 except ImportError:
     from models import NetworkForensicsAction, NetworkForensicsObservation
+    from server.gradio_ui import create_demo
     from server.network_forensics_environment import NetworkForensicsEnvironment
 
 
@@ -51,6 +55,9 @@ app = create_app(
     env_name="network_forensics",
     max_concurrent_envs=1,  # increase this number to allow more concurrent WebSocket sessions
 )
+
+demo = create_demo()
+app = gr.mount_gradio_app(app, demo, path="/demo")
 
 
 def serve(host: str = "0.0.0.0", port: int = 8000):
