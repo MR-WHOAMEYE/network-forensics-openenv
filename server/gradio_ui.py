@@ -268,11 +268,6 @@ def step_env(
 
 
 def create_demo() -> gr.Blocks:
-    theme = gr.themes.Base(
-        primary_hue="cyan",
-        secondary_hue="blue",
-        neutral_hue="slate",
-    )
     css = """
     .app-shell {max-width: 1440px; margin: 0 auto;}
     .panel {border: 1px solid rgba(255,255,255,0.08); border-radius: 18px; padding: 14px; background: rgba(8,15,27,0.78);}
@@ -280,8 +275,9 @@ def create_demo() -> gr.Blocks:
     .hero h1, .hero p {margin: 0;}
     .hero p {opacity: 0.82; margin-top: 8px;}
     """
-    with gr.Blocks(title="Network Forensics Analyst Console", theme=theme, css=css) as demo:
+    with gr.Blocks(title="Network Forensics Analyst Console") as demo:
         with gr.Column(elem_classes=["app-shell"]):
+            gr.HTML(f"<style>{css}</style>")
             gr.Markdown(
                 """
                 <div class="hero">

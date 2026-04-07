@@ -1,63 +1,64 @@
+---
+title: Network Forensics Environment
+emoji: "🛰️"
+colorFrom: red
+colorTo: blue
+sdk: docker
+sdk_version: "1.0.0"
+pinned: false
+app_port: 8000
+base_path: /
+tags:
+  - openenv
+  - rl-environment
+  - network-security
+---
 
 # Network Forensics Environment
 
-`network_forensics` is an OpenEnv benchmark for packet triage and intrusion investigation. It simulates a real analyst workflow: inspect traffic, flag malicious packets, group related activity into sessions, classify attack patterns, identify the likely entry point, and finish with a final report.
+`network_forensics` is an OpenEnv benchmark for packet triage and intrusion investigation. It simulates a real analyst workflow: inspect traffic, flag malicious packets, group related activity into sessions, classify attack patterns, identify the likely entry point, and submit a final report.
 
-This is not a toy environment. Episodes are backed by generated PCAP traces and deterministic JSON answer keys, so agents can be evaluated consistently across runs.
+The environment is grounded in generated PCAP traces plus deterministic JSON answer keys, so agents can be compared consistently while still doing something that resembles real security investigation work.
 
-## Why This Environment Exists
+## Motivation
 
-Security analysts regularly work through packet captures and network telemetry to answer questions such as:
+Security teams routinely answer questions like:
 
 - Which packets are suspicious?
-- Which packets belong to the same attack session?
-- What kind of attack is occurring?
-- Where did the intrusion begin?
+- Which packets belong to the same malicious session?
+- What kind of attack pattern is present?
+- Which packet looks like the first entry point?
 
-This environment turns that process into a reproducible benchmark for LLM and RL agents.
-
-## Core Workflow
-
-At each episode, the agent receives a visible packet window and must make investigation decisions step by step.
-
-Typical flow:
-
-1. inspect packets to reveal payloads
-2. flag suspicious packets
-3. group related packets into sessions
-4. tag sessions with attack types
-5. identify the likely entry point
-6. submit a report
-
-Ground truth is stored in per-task JSON files under `pcaps/`, and grading is deterministic.
+This environment turns that workflow into a reproducible benchmark for LLM and RL-style agents.
 
 ## Tasks
 
-The benchmark ships with three tasks of increasing difficulty.
+The benchmark includes three deterministic tasks with increasing difficulty.
 
 ### Easy
 
-- Dataset flavor: DDoS-heavy traffic mixed with benign flows
 - Files: `pcaps/easy_task.pcap`, `pcaps/easy_task.json`
-- Goal: find the dominant attack traffic and recover the main malicious session
+- Theme: DDoS-heavy traffic mixed with benign flows
+- Goal: find the dominant malicious traffic and recover the main attack sessions
+- Typical difficulty: identify suspicious packets quickly and avoid moving on too early
 
 ### Medium
 
-- Dataset flavor: web attack traffic
-- Attack families: `web_bruteforce`, `web_xss`, `web_sql_injection`
 - Files: `pcaps/medium_task.pcap`, `pcaps/medium_task.json`
-- Goal: distinguish multiple web attack behaviors and group them correctly
+- Theme: mixed web attacks
+- Attack families: `web_bruteforce`, `web_xss`, `web_sql_injection`
+- Goal: recover multiple attack sessions and separate similar-looking web behavior correctly
 
 ### Hard
 
-- Dataset flavor: high-noise denial-of-service traffic
-- Attack families: `dos_hulk`, `dos_goldeneye`, `dos_slowloris`, `dos_slowhttptest`, `heartbleed`
 - Files: `pcaps/hard_task.pcap`, `pcaps/hard_task.json`
-- Goal: recover multiple malicious sessions in noisy traffic and avoid incorrect tagging
+- Theme: noisy denial-of-service and exploitation traffic
+- Attack families: `dos_hulk`, `dos_goldeneye`, `dos_slowloris`, `dos_slowhttptest`, `heartbleed`
+- Goal: recover multiple malicious sessions, avoid false positives, and identify the root cause accurately
 
 ## Action Space
 
-The environment uses the `NetworkForensicsAction` model:
+The environment uses the `NetworkForensicsAction` Pydantic model:
 
 ```python
 class NetworkForensicsAction(Action):
@@ -71,18 +72,12 @@ class NetworkForensicsAction(Action):
 
 Supported actions:
 
-- `inspect_packet`
-  Reveal the payload of `packet_id`.
-- `flag_as_suspicious`
-  Mark `packet_id` as suspicious.
-- `group_into_session`
-  Group `packet_ids` into `session_name`.
-- `tag_pattern`
-  Assign an attack label to a session.
-- `identify_entry_point`
-  Claim the first malicious packet.
-- `submit_report`
-  End the episode and trigger final report scoring.
+- `inspect_packet`: reveal the payload of `packet_id`
+- `flag_as_suspicious`: mark `packet_id` as suspicious
+- `group_into_session`: group `packet_ids` under `session_name`
+- `tag_pattern`: assign an attack label to a session
+- `identify_entry_point`: claim the likely first malicious packet
+- `submit_report`: end the episode and trigger deterministic final grading
 
 ## Observation Space
 
@@ -102,7 +97,7 @@ class NetworkForensicsObservation(Observation):
     current_score_estimate: float
 ```
 
-Each `PacketRecord` contains fields such as:
+Each `PacketRecord` includes network metadata plus packet content fields such as:
 
 - `packet_id`
 - `src_ip`
@@ -110,34 +105,59 @@ Each `PacketRecord` contains fields such as:
 - `src_port`
 - `dst_port`
 - `protocol`
-- `payload_size`
 - `ttl`
-- `flags`
+- `payload_size`
 - `payload_preview`
-- `full_payload` when revealed
+- `full_payload` once revealed
 
 ## Reward and Grading
 
-The reward function is shaped across the trajectory instead of only rewarding the final step.
+The environment uses two complementary signals:
+
+### Shaped Step Reward
+
+Dense reward is provided across the trajectory, not only at the end.
 
 Positive signal is given for:
 
 - first-time malicious packet inspection
 - correct suspicious flags
-- good session grouping overlap
+- high-overlap session grouping
+- correct pattern tagging
 - correct entry-point identification
-- correct final report outcomes
 
-Penalties are applied for:
+Lower reward is given for undesirable behavior such as:
 
 - repeated inspection
-- duplicate flagging
-- false positives
-- invalid or low-quality actions
+- duplicate flags
+- poor grouping recall
+- low-quality or incorrect actions
 
-Both step reward and score stay in the `[0.0, 1.0]` range.
+Both step reward and running score are normalized into `[0.0, 1.0]`.
 
-Deterministic grading is driven by the JSON answer keys in `pcaps/`, which include:
+### Deterministic Final Grader
+
+The final `submit_report` action runs a deterministic audit against the task JSON answer key.
+
+The final score is:
+
+```text
+0.3 * precision + 0.4 * recall + 0.3 * logic
+```
+
+Where:
+
+- `precision`: how cleanly the agent flagged malicious packets
+- `recall`: how much malicious traffic the agent actually recovered
+- `logic`: whether the agent linked sessions, tags, and entry point correctly for the task difficulty
+
+Difficulty-specific success rules are enforced:
+
+- `easy`: strong malicious-packet recall
+- `medium`: strong recall plus meaningful session overlap and acceptable precision
+- `hard`: all of the above plus correct root-cause identification
+
+Ground truth comes from the JSON files in `pcaps/`, including:
 
 - `malicious_packets`
 - `packet_roles`
@@ -145,7 +165,7 @@ Deterministic grading is driven by the JSON answer keys in `pcaps/`, which inclu
 - `session_roles`
 - `entry_point`
 
-The main logic lives in:
+Core implementation lives in:
 
 - `src/reward.py`
 - `src/pcap_generator.py`
@@ -157,29 +177,34 @@ The baseline runner is `inference.py`.
 
 It:
 
-- uses the OpenAI client for all model calls
-- supports `local`, `server`, and `docker` execution modes
-- prints `[START]`, `[STEP]`, and `[END]` lines in benchmark-friendly format
+- uses the OpenAI-compatible client for model calls
+- supports `server` and `docker` execution modes
+- prints `[START]`, `[STEP]`, and `[END]` logs
 - runs `easy`, `medium`, and `hard` sequentially
 
-Environment variables commonly used by the baseline:
+Important environment variables:
 
 - `API_BASE_URL`
 - `MODEL_NAME`
-- `API_KEY` or `HF_TOKEN`
+- `OPENAI_API_KEY`, `API_KEY`, or `HF_TOKEN`
 - `NETWORK_FORENSICS_ENV_MODE`
 - `ENV_BASE_URL`
 - `LOCAL_IMAGE_NAME`
 
-### Baseline Status
+### Example Baseline Results
 
-Current local checks confirm:
+Observed recent runs:
 
-- task enumeration works
-- reward and score stay in `[0.0, 1.0]`
-- `easy`, `medium`, and `hard` all execute end to end
+- `openai/gpt-oss-120b`
+  - `easy`: success `true`, score `0.64`
+  - `medium`: success `false`, score `0.55`
+  - `hard`: success `true`, score `0.63`
+- `mistralai/mistral-small-4-119b-2603`
+  - `easy`: success `false`, score `0.46`
+  - `medium`: success `false`, score `0.57`
+  - `hard`: success `true`, score `0.60`
 
-Exact scores depend on the configured model endpoint.
+These examples show that the environment and final grader are sensitive to model behavior rather than returning a constant score.
 
 ## Running Locally
 
@@ -189,23 +214,35 @@ Install dependencies:
 uv sync
 ```
 
-Run the OpenEnv server:
+Start the server:
+
+```bash
+uv run server
+```
+
+Or with uvicorn directly:
 
 ```bash
 uvicorn server.app:app --host 0.0.0.0 --port 8000
 ```
 
-Available endpoints:
+Useful endpoints:
 
+- `/` for the custom Gradio analyst UI
+- `/web` redirects to `/`
 - `/health`
 - `/docs`
+- `/reset`
+- `/step`
+- `/state`
+- `/schema`
 - `/ws`
-- `/web`
-- `/demo`
 
-Run the baseline:
+Run the baseline against the local server:
 
 ```bash
+export NETWORK_FORENSICS_ENV_MODE=server
+export ENV_BASE_URL=http://localhost:8000
 python inference.py
 ```
 
@@ -222,34 +259,33 @@ docker build -t network-forensics-env -f network_forensics/server/Dockerfile net
 docker run -p 8000:8000 network-forensics-env
 ```
 
-This container path has been verified to:
-
-- build successfully
-- start successfully
-- return `200 OK` from `/health`
+This is the canonical OpenEnv and Hugging Face Space deployment path.
 
 ## Hugging Face Space Deployment
 
 This project is configured as a Docker-based OpenEnv Space through `openenv.yaml`.
 
-Deploy with:
+Validate locally:
 
 ```bash
 openenv validate
-openenv push
 ```
 
-Expected Space endpoints:
+Push to Hugging Face using the custom UI rather than the default OpenEnv web interface:
 
-- `/health`
-- `/docs`
-- `/ws`
-- `/web`
-- `/demo`
+```bash
+openenv push --no-interface
+```
+
+On the deployed Space:
+
+- `/` serves the custom Gradio analyst console
+- `/web` redirects to `/`
+- the OpenEnv API remains available for agent evaluation
 
 ## Connecting From Python
 
-Connect to a running server:
+Connect to a running local or remote server:
 
 ```python
 from network_forensics import NetworkForensicsAction, NetworkForensicsEnv
@@ -264,7 +300,7 @@ with NetworkForensicsEnv(base_url="http://localhost:8000") as env:
     )
 ```
 
-Connect to a deployed environment:
+Connect to a deployed Hugging Face Space:
 
 ```python
 from network_forensics import NetworkForensicsAction, NetworkForensicsEnv
@@ -313,6 +349,7 @@ network_forensics/
 ├── server/
 │   ├── app.py
 │   ├── Dockerfile
+│   ├── gradio_ui.py
 │   └── network_forensics_environment.py
 └── src/
     ├── pcap_generator.py

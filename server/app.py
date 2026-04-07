@@ -29,9 +29,10 @@ Usage:
 """
 
 import gradio as gr
+from fastapi.responses import RedirectResponse
 
 try:
-    from openenv.core.env_server.http_server import create_app
+    from openenv.core.env_server.http_server import create_fastapi_app
 except Exception as e:  # pragma: no cover
     raise ImportError(
         "openenv is required for the web interface. Install dependencies with '\n    uv sync\n'"
@@ -47,17 +48,28 @@ except ImportError:
     from server.network_forensics_environment import NetworkForensicsEnvironment
 
 
-# Create the app with web interface and README integration
-app = create_app(
+# Create the OpenEnv API app first so its routes stay available.
+app = create_fastapi_app(
     NetworkForensicsEnvironment,
     NetworkForensicsAction,
     NetworkForensicsObservation,
-    env_name="network_forensics",
     max_concurrent_envs=1,  # increase this number to allow more concurrent WebSocket sessions
 )
 
-demo = create_demo()
-app = gr.mount_gradio_app(app, demo, path="/demo")
+
+@app.get("/web", include_in_schema=False)
+async def web_redirect() -> RedirectResponse:
+    return RedirectResponse(url="/")
+
+
+@app.get("/web/", include_in_schema=False)
+async def web_redirect_slash() -> RedirectResponse:
+    return RedirectResponse(url="/")
+
+
+# Mount the custom analyst UI at the root path for Hugging Face Spaces. The
+# explicit OpenEnv API routes above continue to take precedence.
+app = gr.mount_gradio_app(app, create_demo(), path="/")
 
 
 def serve(host: str = "0.0.0.0", port: int = 8000):
