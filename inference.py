@@ -22,8 +22,10 @@ API_BASE_URL = os.getenv("API_BASE_URL")
 MODEL_NAME = os.getenv("MODEL_NAME", "openai/gpt-oss-120b")
 API_KEY = os.getenv("OPENAI_API_KEY") or os.getenv("API_KEY") or os.getenv("HF_TOKEN")
 LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME", "network-forensics-env:latest")
-ENV_MODE = (os.getenv("NETWORK_FORENSICS_ENV_MODE") or os.getenv("ENV_MODE") or "docker").lower()
+ENV_MODE = (os.getenv("NETWORK_FORENSICS_ENV_MODE") or os.getenv("ENV_MODE") or "hf").lower()
 ENV_BASE_URL = os.getenv("ENV_BASE_URL", "http://localhost:8000")
+HF_SPACE_ID = os.getenv("HF_SPACE_ID") or os.getenv("SPACE_ID") or "WHOAM-EYE/network_forensics"
+HF_SPACE_URL = os.getenv("HF_SPACE_URL", "https://whoam-eye-network-forensics.hf.space")
 DOCKER_READY_TIMEOUT_S = float(os.getenv("DOCKER_READY_TIMEOUT_S", "120"))
 _ASYNC_LOOP: asyncio.AbstractEventLoop | None = None
 
@@ -52,10 +54,12 @@ def validate_config() -> None:
         missing.append("API_BASE_URL")
     if not API_KEY:
         missing.append("OPENAI_API_KEY/API_KEY/HF_TOKEN")
+    if ENV_MODE == "hf" and not (HF_SPACE_URL or HF_SPACE_ID):
+        missing.append("HF_SPACE_URL or HF_SPACE_ID/SPACE_ID")
     if missing:
         raise RuntimeError(f"Missing required environment variables: {', '.join(missing)}")
-    if ENV_MODE not in {"server", "docker"}:
-        raise RuntimeError("NETWORK_FORENSICS_ENV_MODE must be one of: server, docker")
+    if ENV_MODE not in {"server", "docker", "hf"}:
+        raise RuntimeError("NETWORK_FORENSICS_ENV_MODE must be one of: server, docker, hf")
 
 
 def format_action(action: NetworkForensicsAction) -> str:
@@ -360,12 +364,51 @@ def resolve_maybe_awaitable(value: Any) -> Any:
 
 
 def create_env() -> NetworkForensicsEnv:
+    # Preferred path: Hugging Face Space.
+    if ENV_MODE == "hf":
+        if HF_SPACE_URL:
+            return NetworkForensicsEnv(base_url=HF_SPACE_URL.rstrip("/"))
+        space_slug = HF_SPACE_ID.lower().replace("/", "-").replace("_", "-")
+        return NetworkForensicsEnv(base_url=f"https://{space_slug}.hf.space")
+
     if ENV_MODE == "docker":
         provider = ExtendedWaitDockerProvider()
         return resolve_maybe_awaitable(
             NetworkForensicsEnv.from_docker_image(LOCAL_IMAGE_NAME, provider=provider)
         )
+
+    if ENV_MODE == "server":
+        return NetworkForensicsEnv(base_url=ENV_BASE_URL)
+
     return NetworkForensicsEnv(base_url=ENV_BASE_URL)
+
+
+def create_env_with_fallback() -> NetworkForensicsEnv:
+    # 1) Try HF Space.
+    try:
+        env = NetworkForensicsEnv(base_url=HF_SPACE_URL.rstrip("/"))
+        _ = reset_env(env, "easy")
+        return env
+    except Exception as exc:
+        print(f"[WARN] HF space failed ({exc}); trying Docker.")
+
+    # 2) Try Docker.
+    try:
+        provider = ExtendedWaitDockerProvider()
+        env = resolve_maybe_awaitable(
+            NetworkForensicsEnv.from_docker_image(LOCAL_IMAGE_NAME, provider=provider)
+        )
+        _ = reset_env(env, "easy")
+        return env
+    except Exception as exc:
+        print(f"[WARN] Docker failed ({exc}); trying local server.")
+
+    # 3) Last resort: in-process environment.
+    try:
+        from server.network_forensics_environment import NetworkForensicsEnvironment
+        return NetworkForensicsEnvironment(task_id="easy")  # type: ignore[return-value]
+    except Exception as exc:
+        raise RuntimeError(f"All environment backends failed: {exc}") from exc
 
 
 def reset_env(env: NetworkForensicsEnv, task_name: str) -> Any:
@@ -405,7 +448,7 @@ def run_task(task_name: str) -> None:
     print(f"[START] task={task_name} env=network_forensics model={MODEL_NAME}")
 
     try:
-        env = create_env()
+        env = create_env_with_fallback()
         reset_result = reset_env(env, task_name)
         obs = reset_result.observation
         sync_agent_state(obs, agent_state)
