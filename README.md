@@ -16,18 +16,18 @@ tags:
 
 # Network Forensics Environment
 
-`network_forensics` is an OpenEnv benchmark for packet triage and intrusion investigation. It simulates a real analyst workflow: inspect traffic, flag malicious packets, group related activity into sessions, classify attack patterns, identify the likely entry point, and submit a final report.
+`network_forensics` is an OpenEnv benchmark for packet triage and intrusion investigation. It simulates a real analyst workflow: inspect traffic, flag suspicious packets, group related activity into sessions, classify attack patterns, identify the likely entry point, and submit a final report.
 
-The environment is grounded in generated PCAP traces plus deterministic JSON answer keys, so agents can be compared consistently while still doing something that resembles real security investigation work.
+The environment is backed by generated PCAP traces and deterministic JSON answer keys, so agents can be evaluated consistently while still solving a real-world security analysis task.
 
 ## Motivation
 
-Security teams routinely answer questions like:
+Security analysts routinely ask:
 
 - Which packets are suspicious?
 - Which packets belong to the same malicious session?
-- What kind of attack pattern is present?
-- Which packet looks like the first entry point?
+- What kind of attack is this?
+- Which packet looks like the initial compromise or entry point?
 
 This environment turns that workflow into a reproducible benchmark for LLM and RL-style agents.
 
@@ -39,15 +39,14 @@ The benchmark includes three deterministic tasks with increasing difficulty.
 
 - Files: `pcaps/easy_task.pcap`, `pcaps/easy_task.json`
 - Theme: DDoS-heavy traffic mixed with benign flows
-- Goal: find the dominant malicious traffic and recover the main attack sessions
-- Typical difficulty: identify suspicious packets quickly and avoid moving on too early
+- Goal: recover the main malicious traffic and dominant attack sessions
 
 ### Medium
 
 - Files: `pcaps/medium_task.pcap`, `pcaps/medium_task.json`
 - Theme: mixed web attacks
 - Attack families: `web_bruteforce`, `web_xss`, `web_sql_injection`
-- Goal: recover multiple attack sessions and separate similar-looking web behavior correctly
+- Goal: separate multiple web attack sessions and tag them correctly
 
 ### Hard
 
@@ -97,7 +96,7 @@ class NetworkForensicsObservation(Observation):
     current_score_estimate: float
 ```
 
-Each `PacketRecord` includes network metadata plus packet content fields such as:
+Each `PacketRecord` includes fields such as:
 
 - `packet_id`
 - `src_ip`
@@ -112,13 +111,13 @@ Each `PacketRecord` includes network metadata plus packet content fields such as
 
 ## Reward and Grading
 
-The environment uses two complementary signals:
+The environment uses two complementary signals.
 
 ### Shaped Step Reward
 
-Dense reward is provided across the trajectory, not only at the end.
+Dense reward is provided across the trajectory instead of only at the end.
 
-Positive signal is given for:
+Higher reward is given for:
 
 - first-time malicious packet inspection
 - correct suspicious flags
@@ -206,7 +205,7 @@ Observed recent runs:
 
 These examples show that the environment and final grader are sensitive to model behavior rather than returning a constant score.
 
-## Running Locally
+## Setup and Local Usage
 
 Install dependencies:
 
@@ -241,9 +240,15 @@ Useful endpoints:
 Run the baseline against the local server:
 
 ```bash
-export NETWORK_FORENSICS_ENV_MODE=server
-export ENV_BASE_URL=http://localhost:8000
-python inference.py
+NETWORK_FORENSICS_ENV_MODE=server ENV_BASE_URL=http://localhost:8000 python inference.py
+```
+
+On Windows PowerShell:
+
+```powershell
+$env:NETWORK_FORENSICS_ENV_MODE="server"
+$env:ENV_BASE_URL="http://localhost:8000"
+py .\inference.py
 ```
 
 ## Docker
@@ -252,10 +257,10 @@ The deployment Dockerfile is:
 
 - `server/Dockerfile`
 
-Build and run from the repository root:
+From the cloned `network_forensics` repository root:
 
 ```bash
-docker build -t network-forensics-env -f network_forensics/server/Dockerfile network_forensics
+docker build -t network-forensics-env -f server/Dockerfile .
 docker run -p 8000:8000 network-forensics-env
 ```
 

@@ -19,8 +19,8 @@ from models import NetworkForensicsAction
 load_dotenv(Path(__file__).parent / ".env")
 
 API_BASE_URL = os.getenv("API_BASE_URL")
-MODEL_NAME = os.getenv("MODEL_NAME")
-API_KEY = os.getenv("API_KEY") or os.getenv("HF_TOKEN")
+MODEL_NAME = os.getenv("MODEL_NAME", "openai/gpt-oss-120b")
+API_KEY = os.getenv("OPENAI_API_KEY") or os.getenv("API_KEY") or os.getenv("HF_TOKEN")
 LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME", "network-forensics-env:latest")
 ENV_MODE = (os.getenv("NETWORK_FORENSICS_ENV_MODE") or os.getenv("ENV_MODE") or "docker").lower()
 ENV_BASE_URL = os.getenv("ENV_BASE_URL", "http://localhost:8000")
@@ -50,10 +50,8 @@ def validate_config() -> None:
     missing = []
     if not API_BASE_URL:
         missing.append("API_BASE_URL")
-    if not MODEL_NAME:
-        missing.append("MODEL_NAME")
     if not API_KEY:
-        missing.append("API_KEY")
+        missing.append("OPENAI_API_KEY/API_KEY/HF_TOKEN")
     if missing:
         raise RuntimeError(f"Missing required environment variables: {', '.join(missing)}")
     if ENV_MODE not in {"server", "docker"}:
