@@ -33,7 +33,8 @@ An OpenEnv-powered battlefield where AI learns active defense, incident response
 </div>
 
 ---
-
+![Network Forensics Demo](./demo/demo.gif)
+---
 ## 🎯 **The Problem We Solve**
 
 Security Operations Centers face an acute crisis:
