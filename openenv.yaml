@@ -5,3 +5,99 @@ runtime: fastapi
 app: server.app:app
 port: 8000
 
+description: >
+  An OpenEnv benchmark for autonomous network threat investigation.
+  Agents inspect PCAP traffic, flag malicious packets, group attack
+  sessions, classify attack patterns, identify the initial compromise,
+  and submit an incident report evaluated by both deterministic grading
+  and LLM-as-a-Judge scoring.
+
+tags:
+  - openenv
+  - rl-environment
+  - network-security
+  - cybersecurity
+  - forensics
+  - llm-judge
+  - pytorch
+  - meta
+
+tasks:
+  - id: easy
+    description: >
+      DDoS-heavy traffic mixed with benign flows.
+      Goal: recover the dominant malicious campaign.
+    difficulty: easy
+    max_steps: 40
+
+  - id: medium
+    description: >
+      Mixed web attacks: brute force, XSS, and SQL injection.
+      Goal: separate concurrent attack campaigns and tag them correctly.
+    difficulty: medium
+    max_steps: 70
+
+  - id: hard
+    description: >
+      High-noise DoS traffic with Hulk, GoldenEye, Slowloris,
+      SlowHTTPTest, and a rare Heartbleed trace.
+      Goal: recover multiple sessions, avoid false positives, and
+      identify the root cause accurately.
+    difficulty: hard
+    max_steps: 100
+
+evaluation:
+  method: hybrid
+  components:
+    - type: programmatic
+      weight: 0.85
+      formula: "0.25 * precision + 0.35 * recall + 0.25 * logic_score"
+    - type: llm_judge
+      weight: 0.15
+      description: >
+        Scores the agent's free-text incident summary on accuracy,
+        completeness, clarity, and analytical insight.
+      fallback: keyword_heuristic
+
+action_space:
+  - inspect_packet
+  - flag_as_suspicious
+  - group_into_session
+  - tag_pattern
+  - identify_entry_point
+  - submit_report
+
+observation_space:
+  includes:
+    - visible_packets
+    - flagged_packet_ids
+    - grouped_sessions
+    - tagged_patterns
+    - claimed_entry_point
+    - connection_graph_summary
+    - current_score_estimate
+
+mcp:
+  enabled: true
+  endpoint: /mcp
+  description: >
+    MCP (Model Context Protocol) endpoint for production inference.
+    Any MCP-compatible agent can connect via HTTP POST or WebSocket
+    to investigate network traffic using the tools below.
+  tools:
+    - name: reset_env
+      description: Start a new investigation episode with a chosen difficulty
+    - name: get_status
+      description: Get current investigation progress, score, and session summary
+    - name: inspect_packet
+      description: Reveal the full payload of a packet for deep analysis
+    - name: flag_as_suspicious
+      description: Flag a packet as malicious traffic
+    - name: group_into_session
+      description: Group related packets into a named attack session
+    - name: tag_pattern
+      description: Tag a session with an attack family classification
+    - name: identify_entry_point
+      description: Identify the initial compromise packet
+    - name: submit_report
+      description: Submit final incident report for LLM-as-Judge scoring

@@ -19,6 +19,7 @@ from models import (
 from src.pcap_generator import PCAPGenerator
 from src.tasks.easy import EasyTask
 from src.reward import compute_reward
+from src.graph import ConnectionGraph
 
 
 class NetworkForensicsEnvironment(Environment):
@@ -37,9 +38,37 @@ class NetworkForensicsEnvironment(Environment):
         self._current_score: float = 0.0
         self._reward_history: list[float] = []
         self._max_steps: int = 50
+        self._connection_graph: ConnectionGraph = ConnectionGraph()
 
     def config(self) -> Dict[str, Any]:
         return {"task_id": self._task_id, "max_steps": self._max_steps}
+
+    def _build_graph(self) -> None:
+        """Build the connection graph from all packets."""
+        self._connection_graph = ConnectionGraph()
+        for packet in self._packets:
+            self._connection_graph.add_packet(packet)
+
+    def _get_graph_summary(self) -> Dict[str, Any]:
+        """Return a compact graph summary for the observation."""
+        full_summary = self._connection_graph.get_summary()
+        # Include top-level stats and top-N nodes/edges to keep payload manageable
+        top_nodes = sorted(
+            full_summary.get("nodes", []),
+            key=lambda n: n.get("packet_count", 0),
+            reverse=True,
+        )[:15]
+        top_edges = sorted(
+            full_summary.get("edges", []),
+            key=lambda e: e.get("packet_count", 0),
+            reverse=True,
+        )[:20]
+        return {
+            "node_count": full_summary.get("node_count", 0),
+            "edge_count": full_summary.get("edge_count", 0),
+            "top_talkers": top_nodes,
+            "top_flows": top_edges,
+        }
 
     def reset(
         self, seed: Optional[int] = None, episode_id: Optional[str] = None, **kwargs: Any
@@ -78,6 +107,9 @@ class NetworkForensicsEnvironment(Environment):
         self._reward_history = []
         self._max_steps = config.max_steps
 
+        # Build the connection graph from all packets
+        self._build_graph()
+
         visible = [
             PacketRecord(
                 packet_id=p.packet_id,
@@ -94,7 +126,7 @@ class NetworkForensicsEnvironment(Environment):
                 payload_preview=p.payload_preview,
                 full_payload=p.full_payload if p.is_revealed else None,
             )
-            for p in self._packets[:100]
+            for p in self._packets
         ]
 
         return NetworkForensicsObservation(
@@ -106,8 +138,9 @@ class NetworkForensicsEnvironment(Environment):
             grouped_sessions={},
             tagged_patterns={},
             claimed_entry_point=None,
-            connection_graph_summary={},
+            connection_graph_summary=self._get_graph_summary(),
             current_score_estimate=0.0,
+            final_metrics={},
             done=False,
             reward=0.0,
         )
@@ -130,6 +163,13 @@ class NetworkForensicsEnvironment(Environment):
 
         if action.action_type == "flag_as_suspicious" and action.packet_id:
             self._flagged_packets.add(action.packet_id)
+            # Mark the node as flagged in the connection graph
+            packet_map = {p.packet_id: p for p in self._packets}
+            pkt = packet_map.get(action.packet_id)
+            if pkt:
+                for ip in (pkt.src_ip, pkt.dst_ip):
+                    if ip in self._connection_graph._node_attributes:
+                        self._connection_graph._node_attributes[ip]["flagged"] = True
         elif action.action_type == "group_into_session":
             if action.session_name and action.packet_ids:
                 self._grouped_sessions[action.session_name] = action.packet_ids
@@ -158,7 +198,7 @@ class NetworkForensicsEnvironment(Environment):
                 payload_preview=p.payload_preview,
                 full_payload=p.full_payload if p.is_revealed else None,
             )
-            for p in self._packets[:100]
+            for p in self._packets
         ]
 
         done = (
@@ -175,8 +215,9 @@ class NetworkForensicsEnvironment(Environment):
             grouped_sessions=self._grouped_sessions,
             tagged_patterns=self._tagged_patterns,
             claimed_entry_point=self._claimed_entry_point,
-            connection_graph_summary={},
+            connection_graph_summary=self._get_graph_summary(),
             current_score_estimate=self._current_score,
+            final_metrics=action_result.breakdown,
             done=done,
             reward=action_result.step_reward,
             metadata=action_result.breakdown,

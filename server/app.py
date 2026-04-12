@@ -16,6 +16,11 @@ Endpoints:
     - GET /state: Get current environment state
     - GET /schema: Get action/observation schemas
     - WS /ws: WebSocket endpoint for persistent sessions
+    
+    # MCP Interfaces:
+    - POST /mcp: Simplified MCP interface (existing)
+    - POST /mcp-standard/*: Standard MCP protocol (new)
+    - WS /mcp-standard/ws: Standard MCP WebSocket (new)
 
 Usage:
     # Development (with auto-reload):
@@ -29,32 +34,74 @@ Usage:
 """
 
 import gradio as gr
-from fastapi.responses import RedirectResponse
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse, RedirectResponse
 
 try:
     from openenv.core.env_server.http_server import create_fastapi_app
 except Exception as e:  # pragma: no cover
     raise ImportError(
-        "openenv is required for the web interface. Install dependencies with '\n    uv sync\n'"
+        "openenv is required. Install dependencies with '\n    uv sync\n'"
     ) from e
 
 try:
     from ..models import NetworkForensicsAction, NetworkForensicsObservation
     from .gradio_ui import create_demo
-    from .network_forensics_environment import NetworkForensicsEnvironment
+    from .mcp_network_forensics_environment import NetworkForensicsMCPEnv
 except ImportError:
     from models import NetworkForensicsAction, NetworkForensicsObservation
     from server.gradio_ui import create_demo
-    from server.network_forensics_environment import NetworkForensicsEnvironment
+    from server.mcp_network_forensics_environment import NetworkForensicsMCPEnv
 
 
-# Create the OpenEnv API app first so its routes stay available.
+# ---------------------------------------------------------------------------
+# OpenEnv API — exposes /reset, /step, /state, /schema, /ws
+# PLUS /mcp (HTTP POST + WebSocket) for MCP tool access
+# AND /mcp-standard/* for full MCP protocol compliance
+# ---------------------------------------------------------------------------
 app = create_fastapi_app(
-    NetworkForensicsEnvironment,
+    NetworkForensicsMCPEnv,
     NetworkForensicsAction,
     NetworkForensicsObservation,
-    max_concurrent_envs=1,  # increase this number to allow more concurrent WebSocket sessions
+    max_concurrent_envs=4,  # allow up to 4 concurrent WebSocket sessions
 )
+
+# ---------------------------------------------------------------------------
+# Standard MCP Server — routes registered directly on the main app so they
+# take priority over Gradio's catch-all mount at "/".
+# Using app.mount() for a sub-app does NOT work because Gradio's mount
+# at "/" swallows all paths before sub-app mounts get a chance.
+# ---------------------------------------------------------------------------
+from server.mcp_standard_server import register_mcp_routes
+
+register_mcp_routes(app)
+
+
+@app.get("/health", include_in_schema=False)
+async def health_check() -> JSONResponse:
+    """Liveness probe for Hugging Face Spaces and Docker health checks."""
+    return JSONResponse({"status": "ok", "service": "network-forensics-env"})
+
+
+@app.get("/mcp-info", include_in_schema=False)
+async def mcp_info() -> JSONResponse:
+    """Information about available MCP interfaces."""
+    return JSONResponse({
+        "mcp_interfaces": {
+            "simplified": {
+                "endpoint": "/mcp",
+                "description": "Simplified MCP interface (HTTP POST + WebSocket)",
+                "compatibility": "OpenEnv custom protocol"
+            },
+            "standard": {
+                "endpoint": "/mcp-standard",
+                "description": "Full MCP protocol compliance (JSON-RPC 2.0)",
+                "compatibility": "Claude Desktop, Cursor, standard MCP clients",
+                "methods": ["initialize", "tools/list", "tools/call"]
+            }
+        },
+        "note": "POST JSON-RPC 2.0 to /mcp-standard for standard MCP clients"
+    })
 
 
 @app.get("/web", include_in_schema=False)
@@ -68,7 +115,8 @@ async def web_redirect_slash() -> RedirectResponse:
 
 
 # Mount the custom analyst UI at the root path for Hugging Face Spaces. The
-# explicit OpenEnv API routes above continue to take precedence.
+# explicit API routes above (including /mcp-standard) take precedence because
+# FastAPI routes are checked before Starlette mounts.
 app = gr.mount_gradio_app(app, create_demo(), path="/")
 
 

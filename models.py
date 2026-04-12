@@ -32,6 +32,7 @@ class NetworkForensicsAction(Action):
     session_name: Optional[str] = Field(default=None, description="Name for the session group")
     pattern_type: Optional[str] = Field(default=None, description="Pattern type: c2, exfil, scan, lateral")
     claimed_entry_point: Optional[str] = Field(default=None, description="Packet ID claimed as entry point")
+    incident_summary: Optional[str] = Field(default=None, description="Free-text incident report for LLM-as-a-Judge evaluation on submit_report")
 
     @field_validator("packet_ids", mode="before")
     @classmethod
@@ -57,6 +58,10 @@ class NetworkForensicsObservation(Observation):
     claimed_entry_point: Optional[str] = Field(default=None, description="Agent's identified entry point")
     connection_graph_summary: Dict[str, Any] = Field(default_factory=dict, description="Graph topology summary")
     current_score_estimate: float = Field(default=0.0, description="Running score estimate")
+    final_metrics: Dict[str, Any] = Field(default_factory=dict, description="Final/report scoring metrics")
+    reward: float = Field(default=0.0, description="Step reward")
+    done: bool = Field(default=False, description="Whether the episode is finished")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Step metadata (final scores, breakdown)")
 
 
 class Reward(BaseModel):
