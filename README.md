@@ -441,8 +441,9 @@ export NETWORK_FORENSICS_ENV_MODE="server"
 python inference.py
 ```
 
-
 ## 🔌 MCP Integration (Model Context Protocol)
+
+![Network Forensics mcp Demo](./demo/demo2.gif)
 
 This environment exposes two Model Context Protocol (MCP) interfaces:
 
